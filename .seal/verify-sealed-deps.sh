@@ -10,7 +10,10 @@
 #   approving every array (validateSubType reads _acceptArrayTypes and unwraps Class.getComponentType), and consults
 #   the name-based matchers for the element type too (validateSubType calls validateSubClassName);
 # - the shaded jackson-databind validates the type parameters of generic type ids against the PolymorphicTypeValidator
-#   instead of only the raw container class (DatabindContext._resolveAndValidateGeneric calls _validateTypeParameter).
+#   instead of only the raw container class (DatabindContext._resolveAndValidateGeneric calls _validateTypeParameter);
+# - the shaded jackson-databind keeps the per-property @JsonIgnoreProperties / @JsonIncludeProperties when a per-property
+#   @JsonFormat changes the case-insensitivity (BeanDeserializerBase.createContextual rebuilds the case-insensitive
+#   property map from the filtered contextual deserializer, not from this).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -98,3 +101,21 @@ for cls in BeanDeserializer BuilderBasedDeserializer; do
 done
 echo "the shaded jackson-databind BeanDeserializer and BuilderBasedDeserializer honor @JsonView in the property-based" \
   "creator paths"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/deser/BeanDeserializerBase.class \
+  > "${tmp}/BeanDeserializerBase.class"
+# createContextual must read the BeanPropertyMap it hands to withCaseInsensitivity from the contextual deserializer that
+# _handleByNameInclusion filtered (a local variable), not from this (aload_0), which still holds the ignored properties.
+# Print the instruction that loads the object whose _beanProperties is read right before withCaseInsensitivity.
+javap -c -p "${tmp}/BeanDeserializerBase.class" > "${tmp}/BeanDeserializerBase.javap"
+loader="$(awk '/ createContextual\(/ { inside = 1 } inside && /^$/ { inside = 0 }
+    inside && /Field ([^ ]*[.])?_beanProperties:/ { owner = prev }
+    inside && /BeanPropertyMap.withCaseInsensitivity:/ { print owner }
+    inside { prev = $0 }' "${tmp}/BeanDeserializerBase.javap")"
+if ! echo "${loader}" | grep ': aload' > /dev/null || echo "${loader}" | grep ': aload_0 *$' > /dev/null; then
+  echo "the shaded jackson-databind BeanDeserializerBase.createContextual in ${jar} rebuilds the case-insensitive" \
+    "property map from the unfiltered properties, undoing per-property @JsonIgnoreProperties" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind BeanDeserializerBase keeps per-property @JsonIgnoreProperties for case-insensitive" \
+  "properties"
