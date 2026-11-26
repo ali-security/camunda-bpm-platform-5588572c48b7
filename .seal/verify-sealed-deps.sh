@@ -22,7 +22,10 @@
 #   BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId calls it for creator properties too);
 # - the shaded jackson-databind deserializes InetAddress values from IP address literals only, without DNS lookups
 #   (FromStringDeserializer$Std._deserialize calls InetAddressValidator.isInetAddress before InetAddress.getByName,
-#   and InetAddressValidator checks every character through its ASCII-only _digit helper, never Character.digit).
+#   and InetAddressValidator checks every character through its ASCII-only _digit helper, never Character.digit);
+# - the shaded jackson-databind deserializes java.nio.file.Path values only from "file" URIs (or values with no scheme)
+#   by default and rejects every other URI scheme before any FileSystemProvider lookup (NioPathDeserializer.deserialize
+#   calls _isSchemeAllowed before Paths.get(URI), and DEFAULT_ALLOWED_SCHEMES is the singleton list of "file").
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -203,3 +206,28 @@ if [ "${calls}" -lt 2 ]; then
 fi
 echo "the shaded jackson-databind ExternalTypeHandler and BeanDeserializer honor @JsonView for external type id" \
   "properties and the creator properties of their beans"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/ext/NioPathDeserializer.class \
+  > "${tmp}/NioPathDeserializer.class"
+# deserialize must check the URI scheme against the allow-list before it hands the URI to Paths.get(URI), whose
+# FileSystemNotFoundException fallback looks the scheme's FileSystemProvider up through the thread context class
+# loader. Unpatched, deserialize passes every scheme to Paths.get(URI). Print the javap line numbers of the first
+# _isSchemeAllowed call and of the first Paths.get(URI) call in its body.
+javap -c -p "${tmp}/NioPathDeserializer.class" > "${tmp}/NioPathDeserializer.javap"
+order="$(awk '/ deserialize\(/ { inside = 1 } inside && /^$/ { inside = 0 }
+    inside && /Method _isSchemeAllowed:/ && !allowed { allowed = NR }
+    inside && /Method java\/nio\/file\/Paths.get:\(Ljava\/net\/URI;\)/ && !get { get = NR }
+    END { print allowed + 0, get + 0 }' "${tmp}/NioPathDeserializer.javap")"
+read -r allowed_line get_line <<< "${order}"
+if [ "${allowed_line}" -eq 0 ] || [ "${get_line}" -eq 0 ] || [ "${allowed_line}" -gt "${get_line}" ]; then
+  echo "the shaded jackson-databind NioPathDeserializer.deserialize in ${jar} resolves Path values of any URI scheme" >&2
+  exit 1
+fi
+# The default allow-list (used by the no-argument constructor that Jackson registers) must hold only "file".
+if ! awk '/^  static \{\};/ { inside = 1 } inside && /^$/ { inside = 0 } inside' "${tmp}/NioPathDeserializer.javap" \
+    | grep -A 1 '// String file$' | grep 'Method java/util/Collections.singletonList:' > /dev/null; then
+  echo "the shaded jackson-databind NioPathDeserializer in ${jar} does not default to the \"file\" URI scheme only" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind NioPathDeserializer accepts only \"file\" URIs (or no scheme) for Path values and" \
+  "rejects other URI schemes before any FileSystemProvider lookup"
