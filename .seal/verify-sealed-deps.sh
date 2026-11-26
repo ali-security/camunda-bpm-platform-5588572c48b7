@@ -13,7 +13,9 @@
 #   instead of only the raw container class (DatabindContext._resolveAndValidateGeneric calls _validateTypeParameter);
 # - the shaded jackson-databind keeps the per-property @JsonIgnoreProperties / @JsonIncludeProperties when a per-property
 #   @JsonFormat changes the case-insensitivity (BeanDeserializerBase.createContextual rebuilds the case-insensitive
-#   property map from the filtered contextual deserializer, not from this).
+#   property map from the filtered contextual deserializer, not from this);
+# - the shaded jackson-databind does not set @JsonUnwrapped properties that the active @JsonView hides
+#   (UnwrappedPropertyHandler.processUnwrapped calls SettableBeanProperty.visibleInView).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -119,3 +121,16 @@ if ! echo "${loader}" | grep ': aload' > /dev/null || echo "${loader}" | grep ':
 fi
 echo "the shaded jackson-databind BeanDeserializerBase keeps per-property @JsonIgnoreProperties for case-insensitive" \
   "properties"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/deser/impl/UnwrappedPropertyHandler.class \
+  > "${tmp}/UnwrappedPropertyHandler.class"
+# processUnwrapped must check the active view before it sets each unwrapped property from the buffered JSON.
+# Unpatched, it never calls SettableBeanProperty.visibleInView.
+javap -c -p "${tmp}/UnwrappedPropertyHandler.class" > "${tmp}/UnwrappedPropertyHandler.javap"
+if ! awk '/ processUnwrapped\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+    "${tmp}/UnwrappedPropertyHandler.javap" | grep 'SettableBeanProperty.visibleInView:' > /dev/null; then
+  echo "the shaded jackson-databind UnwrappedPropertyHandler.processUnwrapped in ${jar} lets @JsonView-restricted" \
+    "@JsonUnwrapped properties be set" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind UnwrappedPropertyHandler honors @JsonView for @JsonUnwrapped properties"
