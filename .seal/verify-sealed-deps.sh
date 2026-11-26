@@ -27,7 +27,10 @@
 #   by default and rejects every other URI scheme before any FileSystemProvider lookup (NioPathDeserializer.deserialize
 #   calls _isSchemeAllowed before Paths.get(URI), and DEFAULT_ALLOWED_SCHEMES is the singleton list of "file");
 # - the shaded jackson-databind DefaultBaseTypeLimitingValidator blocks java.lang.Comparable as an unsafe polymorphic base
-#   type (the DefaultBaseTypeLimitingValidator$UnsafeBaseTypes constructor adds Comparable to UNSAFE).
+#   type (the DefaultBaseTypeLimitingValidator$UnsafeBaseTypes constructor adds Comparable to UNSAFE);
+# - the shaded jackson-databind bounds the type id to deserializer cache of its TypeDeserializers
+#   (TypeDeserializerBase._findDeserializer clears the cache once it holds 1000 entries, skips type ids longer than 256
+#   characters, and returns the "nullifying" fallback without caching it).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -249,3 +252,26 @@ if ! awk '/[$]UnsafeBaseTypes\(/ { inside = 1 } inside && /^$/ { inside = 0 } in
 fi
 echo "the shaded jackson-databind DefaultBaseTypeLimitingValidator blocks java.lang.Comparable as an unsafe polymorphic" \
   "base type"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/jsontype/impl/TypeDeserializerBase.class \
+  > "${tmp}/TypeDeserializerBase.class"
+# _findDeserializer must bound the type id cache before it adds an entry: compare the type id length with 256 and the
+# cache size with 1000, and clear the cache once it is full. It must also compare the deserializer it found with
+# NullifyingDeserializer.instance (so it can return it uncached), besides returning that instance for unknown ids.
+# Unpatched, it puts every type id into the cache unconditionally and reads NullifyingDeserializer.instance only once.
+javap -c -p "${tmp}/TypeDeserializerBase.class" > "${tmp}/TypeDeserializerBase.javap"
+awk '/ _findDeserializer\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+  "${tmp}/TypeDeserializerBase.javap" > "${tmp}/_findDeserializer.javap"
+nullifying="$(grep -c 'Field [^ ]*NullifyingDeserializer.instance:' "${tmp}/_findDeserializer.javap" || true)"
+if ! grep -E 'sipush +256$' "${tmp}/_findDeserializer.javap" > /dev/null \
+    || ! grep 'Method java/lang/String.length:' "${tmp}/_findDeserializer.javap" > /dev/null \
+    || ! grep -E 'sipush +1000$' "${tmp}/_findDeserializer.javap" > /dev/null \
+    || ! grep 'InterfaceMethod java/util/Map.size:' "${tmp}/_findDeserializer.javap" > /dev/null \
+    || ! grep 'InterfaceMethod java/util/Map.clear:' "${tmp}/_findDeserializer.javap" > /dev/null \
+    || [ "${nullifying}" -lt 2 ]; then
+  echo "the shaded jackson-databind TypeDeserializerBase._findDeserializer in ${jar} lets the type id cache grow" \
+    "without bound" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind TypeDeserializerBase bounds the type id cache and does not cache the nullifying" \
+  "fallback"
