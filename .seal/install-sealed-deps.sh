@@ -19,6 +19,12 @@
 #   (#5974)).
 #   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
 #   (patches/CVE-2026-59888.patch).
+# - jackson-databind 2.15.2 with the fix for CVE-2026-54513 (BasicPolymorphicTypeValidator.allowIfSubTypeIsArray()
+#   approved every array, so a denied type wrapped as an array, e.g. Evil[] or Evil[][], bypassed the sub-type
+#   allow-list; the validator now unwraps arrays and validates the innermost element type, upstream
+#   FasterXML/jackson-databind 01d1692c8d0ed03e51a0e3c4f8a9e6908e4931e5 (#5981)).
+#   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
+#   (patches/CVE-2026-54513.llm.patch).
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -60,15 +66,17 @@ git -C "${work}/jackson-databind" fetch --quiet --depth 1 https://github.com/Fas
 git -C "${work}/jackson-databind" checkout --quiet FETCH_HEAD
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54514.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59888.patch"
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54513.patch"
 # Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
 # unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
-# POJOPropertiesCollector.
+# POJOPropertiesCollector, plus the array element type validation tests and the other tests covering
+# BasicPolymorphicTypeValidator.allowIfSubTypeIsArray().
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
-  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test \
+  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.javadoc.skip=true -Dgpg.skip=true
-echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization and the renamed" \
-  "@JsonIgnore Record component ignoral into ${HOME}/.m2"
+echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization, the renamed" \
+  "@JsonIgnore Record component ignoral and the array element type validation into ${HOME}/.m2"
 
 # The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
 # build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against

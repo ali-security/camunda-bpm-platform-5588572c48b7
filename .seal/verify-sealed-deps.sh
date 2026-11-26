@@ -5,7 +5,9 @@
 #   (FromStringDeserializer$Std calls InetSocketAddress.createUnresolved) and brackets unresolved IPv6 hosts when
 #   serializing them (InetSocketAddressSerializer checks str.startsWith("["));
 # - the shaded jackson-databind keeps a @JsonIgnore'd Record component ignored when a PropertyNamingStrategy renames it
-#   (POJOPropertiesCollector._renameUsing calls _collectIgnorals for the renamed name).
+#   (POJOPropertiesCollector._renameUsing calls _collectIgnorals for the renamed name);
+# - the shaded jackson-databind BasicPolymorphicTypeValidator validates the element type of array sub-types instead of
+#   approving every array (validateSubType reads _acceptArrayTypes and unwraps Class.getComponentType).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -46,3 +48,16 @@ if ! awk '/ _renameUsing\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside'
   exit 1
 fi
 echo "the shaded jackson-databind POJOPropertiesCollector keeps renamed @JsonIgnore'd properties ignored"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/jsontype/BasicPolymorphicTypeValidator.class \
+  > "${tmp}/BasicPolymorphicTypeValidator.class"
+# Check the bytecode of validateSubType itself: it must read _acceptArrayTypes and unwrap the array component type.
+javap -c -p "${tmp}/BasicPolymorphicTypeValidator.class" > "${tmp}/BasicPolymorphicTypeValidator.javap"
+awk '/ validateSubType\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+  "${tmp}/BasicPolymorphicTypeValidator.javap" > "${tmp}/validateSubType.javap"
+if ! grep 'Field _acceptArrayTypes:Z' "${tmp}/validateSubType.javap" > /dev/null \
+    || ! grep 'Method java/lang/Class.getComponentType:' "${tmp}/validateSubType.javap" > /dev/null; then
+  echo "the shaded jackson-databind BasicPolymorphicTypeValidator in ${jar} approves arrays of any element type" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind BasicPolymorphicTypeValidator validates the element type of array sub-types"
