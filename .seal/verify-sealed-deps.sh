@@ -80,3 +80,21 @@ if ! awk '/ _resolveAndValidateGeneric\(/ { inside = 1 } inside && /^$/ { inside
   exit 1
 fi
 echo "the shaded jackson-databind DatabindContext validates the type parameters of generic type ids"
+
+# The property-based creator paths must check the active view both for creator properties and for the regular
+# properties they buffer, i.e. call SettableBeanProperty.visibleInView twice. Unpatched, _deserializeUsingPropertyBased
+# checks only creator properties (one call) and deserializeUsingPropertyBasedWithUnwrapped checks neither (no call).
+for cls in BeanDeserializer BuilderBasedDeserializer; do
+  unzip -p "${jar}" "spinjar/com/fasterxml/jackson/databind/deser/${cls}.class" > "${tmp}/${cls}.class"
+  javap -c -p "${tmp}/${cls}.class" > "${tmp}/${cls}.javap"
+  for method in _deserializeUsingPropertyBased deserializeUsingPropertyBasedWithUnwrapped; do
+    calls="$(awk -v m=" ${method}\\\\(" '$0 ~ m { inside = 1 } inside && /^$/ { inside = 0 } inside' "${tmp}/${cls}.javap" \
+      | grep -c 'SettableBeanProperty.visibleInView:' || true)"
+    if [ "${calls}" -lt 2 ]; then
+      echo "the shaded jackson-databind ${cls}.${method} in ${jar} lets @JsonView-restricted properties be set" >&2
+      exit 1
+    fi
+  done
+done
+echo "the shaded jackson-databind BeanDeserializer and BuilderBasedDeserializer honor @JsonView in the property-based" \
+  "creator paths"
