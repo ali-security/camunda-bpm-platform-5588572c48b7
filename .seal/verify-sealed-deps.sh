@@ -15,7 +15,11 @@
 #   @JsonFormat changes the case-insensitivity (BeanDeserializerBase.createContextual rebuilds the case-insensitive
 #   property map from the filtered contextual deserializer, not from this);
 # - the shaded jackson-databind does not set @JsonUnwrapped properties that the active @JsonView hides
-#   (UnwrappedPropertyHandler.processUnwrapped calls SettableBeanProperty.visibleInView).
+#   (UnwrappedPropertyHandler.processUnwrapped calls SettableBeanProperty.visibleInView);
+# - the shaded jackson-databind does not set external type id (EXTERNAL_PROPERTY) properties, nor the creator
+#   parameters of a bean that has one, that the active @JsonView hides (both ExternalTypeHandler.complete overloads and
+#   ExternalTypeHandler._deserializeAndSet call SettableBeanProperty.visibleInView, and
+#   BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId calls it for creator properties too).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -134,3 +138,36 @@ if ! awk '/ processUnwrapped\(/ { inside = 1 } inside && /^$/ { inside = 0 } ins
   exit 1
 fi
 echo "the shaded jackson-databind UnwrappedPropertyHandler honors @JsonView for @JsonUnwrapped properties"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/deser/impl/ExternalTypeHandler.class \
+  > "${tmp}/ExternalTypeHandler.class"
+# Both complete overloads (default-constructor and property-based creator) and _deserializeAndSet must check the active
+# view before they bind the buffered value of an external type id property. Unpatched, none of them calls
+# SettableBeanProperty.visibleInView. Print the number of calls in each method body, one line per overload.
+javap -c -p "${tmp}/ExternalTypeHandler.class" > "${tmp}/ExternalTypeHandler.javap"
+for method in complete _deserializeAndSet; do
+  counts="$(awk -v m=" ${method}\\\\(" '$0 ~ m { inside = 1; n = 0 } inside && /SettableBeanProperty.visibleInView:/ { n++ }
+      inside && /^$/ { inside = 0; print n } END { if (inside) print n }' "${tmp}/ExternalTypeHandler.javap")"
+  expected=1
+  if [ "${method}" = complete ]; then
+    expected=2
+  fi
+  checked="$(echo "${counts}" | grep -c '^[1-9]' || true)"
+  if [ "${checked}" -ne "${expected}" ]; then
+    echo "the shaded jackson-databind ExternalTypeHandler.${method} in ${jar} lets @JsonView-restricted external type id" \
+      "properties be set" >&2
+    exit 1
+  fi
+done
+# The external-type-id property-based creator path must check the active view for creator properties as well as for
+# the regular properties it buffers, i.e. call SettableBeanProperty.visibleInView twice. Unpatched, it checks only the
+# regular properties (one call).
+calls="$(awk '/ deserializeUsingPropertyBasedWithExternalTypeId\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+  "${tmp}/BeanDeserializer.javap" | grep -c 'SettableBeanProperty.visibleInView:' || true)"
+if [ "${calls}" -lt 2 ]; then
+  echo "the shaded jackson-databind BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId in ${jar} lets" \
+    "@JsonView-restricted creator properties be set" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind ExternalTypeHandler and BeanDeserializer honor @JsonView for external type id" \
+  "properties and the creator properties of their beans"

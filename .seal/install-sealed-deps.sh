@@ -53,6 +53,15 @@
 #   d627a8a86fcb062429282f79f3f256f181ed2c7b (#6060)).
 #   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
 #   (patches/CVE-2026-59889.patch).
+# - jackson-databind 2.15.2 with the fix for GHSA-mhm7-754m-9p8w (sonatype-2026-004744, @JsonView bypassed for
+#   properties with an external type id (@JsonTypeInfo(include = EXTERNAL_PROPERTY)): ExternalTypeHandler bound the
+#   buffered value of such a property in complete(...) and _deserializeAndSet even when the active view hides it, and
+#   the creator-property branch of BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId set view-restricted
+#   creator parameters from untrusted JSON; both now skip the properties that are not visible in the active view,
+#   upstream FasterXML/jackson-databind c628b357ed143d8492756d5c1458cfb9fbeb29ed (#6054), plus the creator-property
+#   view check of the external-type-id path from 7dc7a17459e70b7db071cfdf06d2d96d70d4069d (#6004)).
+#   The patch is ported from the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.4+sp1p1 ships
+#   (patches/GHSA-mhm7-754m-9p8w.llm.patch).
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -99,6 +108,7 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54512
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54518.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54515.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59889.patch"
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/GHSA-mhm7-754m-9p8w.patch"
 # Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
 # unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
 # POJOPropertiesCollector, plus the array element type validation tests and the other tests covering
@@ -108,15 +118,17 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59889
 # paths of BeanDeserializer and BuilderBasedDeserializer, plus the case-insensitive per-property ignoral tests and the
 # other case-insensitivity and per-property ignoral / inclusion tests covering BeanDeserializerBase.createContextual,
 # plus the @JsonView unwrapped field / setter bypass tests and the other unwrapped tests covering
-# UnwrappedPropertyHandler.processUnwrapped.
+# UnwrappedPropertyHandler.processUnwrapped, plus the @JsonView external type id bypass tests and the other external
+# type id tests covering ExternalTypeHandler and BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId.
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
-  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383 \
+  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383,JsonViewExternalTypeIdBypassTest,CreatorViewBypassExtTypeIdTest,ExternalTypeIdTest,ExternalTypeIdWithCreatorTest,ExternalTypeIdWithCreator3045Test,ExternalTypeId2588Test,ExternalTypeId96Test,ExternalTypeIdWithEnum1328Test,ExternalTypeIdWithIgnoreUnknownTest,ExternalTypeCustomResolverTest,JsonValueExtTypeIdTest,MultipleExternalIds291Test,TestPropertyCreatorSubtypesExternalPropertyMissingProperty,TestSubtypesExternalPropertyMissingProperty,DelegatingExternalProperty1003Test,TestVisibleTypeId,BuilderAdvancedTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.javadoc.skip=true -Dgpg.skip=true
 echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization, the renamed" \
   "@JsonIgnore Record component ignoral, the array element type validation, the generic type parameter" \
   "validation, the @JsonView checks of the property-based creator paths, the per-property ignoral kept by" \
-  "case-insensitive deserialization and the @JsonView checks of unwrapped properties into ${HOME}/.m2"
+  "case-insensitive deserialization, the @JsonView checks of unwrapped properties and the @JsonView checks of" \
+  "external type id properties into ${HOME}/.m2"
 
 # The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
 # build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against
