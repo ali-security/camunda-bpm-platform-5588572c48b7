@@ -78,6 +78,13 @@
 #   FasterXML/jackson-databind cc6756b61ed90b6b9227f670e0408d5d9bd48551 (#6129)).
 #   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.4+sp1p1 ships
 #   (patches/CVE-2026-19032.llm.patch).
+# - jackson-databind 2.15.2 with the fix for CVE-2026-83557 (GHSA-gx83-3vf8-gh7j, java.lang.Comparable was missing from
+#   the unsafe base types of DefaultBaseTypeLimitingValidator, so with BLOCK_UNSAFE_POLYMORPHIC_BASE_TYPES enabled a
+#   polymorphic Comparable property (@JsonTypeInfo(use = CLASS)) still let untrusted JSON pick any Comparable
+#   implementation as the sub-type, gadget types included; Comparable is now blocked as a base type like Object and
+#   Serializable, upstream FasterXML/jackson-databind eb3b7fc0f9c0d27f471550ac3316b17d1987388f (#6156)).
+#   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
+#   (patches/CVE-2026-83557.patch), without the 2.18.10 version note in the javadoc.
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -127,6 +134,7 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59889
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/GHSA-mhm7-754m-9p8w.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-77310.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-19032.patch"
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-83557.patch"
 # Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
 # unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
 # POJOPropertiesCollector, plus the array element type validation tests and the other tests covering
@@ -140,7 +148,8 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-19032
 # type id tests covering ExternalTypeHandler and BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId,
 # plus the InetAddress literal-only tests (JDKStringLikeTypeDeserTest, JDKTypeSerializationTest) and the empty-String
 # coercion tests covering the InetAddress branch of FromStringDeserializer, plus the Path URI scheme allow-list tests
-# covering NioPathDeserializer (TestJava7Types).
+# covering NioPathDeserializer (TestJava7Types), plus the Comparable base type test covering the unsafe base types of
+# DefaultBaseTypeLimitingValidator (AnnotatedPolymorphicValidationTest).
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
   -Dtest=TestJava7Types,JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,CoerceMiscScalarsTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383,JsonViewExternalTypeIdBypassTest,CreatorViewBypassExtTypeIdTest,ExternalTypeIdTest,ExternalTypeIdWithCreatorTest,ExternalTypeIdWithCreator3045Test,ExternalTypeId2588Test,ExternalTypeId96Test,ExternalTypeIdWithEnum1328Test,ExternalTypeIdWithIgnoreUnknownTest,ExternalTypeCustomResolverTest,JsonValueExtTypeIdTest,MultipleExternalIds291Test,TestPropertyCreatorSubtypesExternalPropertyMissingProperty,TestSubtypesExternalPropertyMissingProperty,DelegatingExternalProperty1003Test,TestVisibleTypeId,BuilderAdvancedTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
@@ -149,8 +158,8 @@ echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress de
   "@JsonIgnore Record component ignoral, the array element type validation, the generic type parameter" \
   "validation, the @JsonView checks of the property-based creator paths, the per-property ignoral kept by" \
   "case-insensitive deserialization, the @JsonView checks of unwrapped properties, the @JsonView checks of" \
-  "external type id properties, the literal-only InetAddress deserialization and the Path URI scheme allow-list" \
-  "into ${HOME}/.m2"
+  "external type id properties, the literal-only InetAddress deserialization, the Path URI scheme allow-list and" \
+  "the Comparable unsafe base type into ${HOME}/.m2"
 
 # The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
 # build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against

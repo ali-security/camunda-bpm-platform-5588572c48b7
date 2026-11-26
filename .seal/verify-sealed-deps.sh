@@ -25,7 +25,9 @@
 #   and InetAddressValidator checks every character through its ASCII-only _digit helper, never Character.digit);
 # - the shaded jackson-databind deserializes java.nio.file.Path values only from "file" URIs (or values with no scheme)
 #   by default and rejects every other URI scheme before any FileSystemProvider lookup (NioPathDeserializer.deserialize
-#   calls _isSchemeAllowed before Paths.get(URI), and DEFAULT_ALLOWED_SCHEMES is the singleton list of "file").
+#   calls _isSchemeAllowed before Paths.get(URI), and DEFAULT_ALLOWED_SCHEMES is the singleton list of "file");
+# - the shaded jackson-databind DefaultBaseTypeLimitingValidator blocks java.lang.Comparable as an unsafe polymorphic base
+#   type (the DefaultBaseTypeLimitingValidator$UnsafeBaseTypes constructor adds Comparable to UNSAFE).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -231,3 +233,19 @@ if ! awk '/^  static \{\};/ { inside = 1 } inside && /^$/ { inside = 0 } inside'
 fi
 echo "the shaded jackson-databind NioPathDeserializer accepts only \"file\" URIs (or no scheme) for Path values and" \
   "rejects other URI schemes before any FileSystemProvider lookup"
+
+unzip -p "${jar}" 'spinjar/com/fasterxml/jackson/databind/jsontype/DefaultBaseTypeLimitingValidator$UnsafeBaseTypes.class' \
+  > "${tmp}/DefaultBaseTypeLimitingValidator\$UnsafeBaseTypes.class"
+# UNSAFE is filled by the instance initializer, i.e. in the constructor of UnsafeBaseTypes: its body must load the
+# java.lang.Comparable class constant whose name it adds. Unpatched, the class does not reference Comparable at all.
+javap -c -p "${tmp}/DefaultBaseTypeLimitingValidator\$UnsafeBaseTypes.class" \
+  > "${tmp}/DefaultBaseTypeLimitingValidator\$UnsafeBaseTypes.javap"
+if ! awk '/[$]UnsafeBaseTypes\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+    "${tmp}/DefaultBaseTypeLimitingValidator\$UnsafeBaseTypes.javap" \
+    | grep -E 'ldc(_w)? .*// class java/lang/Comparable$' > /dev/null; then
+  echo "the shaded jackson-databind DefaultBaseTypeLimitingValidator in ${jar} does not block java.lang.Comparable as" \
+    "an unsafe polymorphic base type" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind DefaultBaseTypeLimitingValidator blocks java.lang.Comparable as an unsafe polymorphic" \
+  "base type"
