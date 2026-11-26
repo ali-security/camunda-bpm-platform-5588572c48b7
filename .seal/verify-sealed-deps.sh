@@ -3,7 +3,9 @@
 # - the shaded jackson-core non-blocking parser validates number lengths (NonBlockingUtf8JsonParserBase._setIntLength);
 # - the shaded jackson-databind deserializes InetSocketAddress values unresolved
 #   (FromStringDeserializer$Std calls InetSocketAddress.createUnresolved) and brackets unresolved IPv6 hosts when
-#   serializing them (InetSocketAddressSerializer checks str.startsWith("[")).
+#   serializing them (InetSocketAddressSerializer checks str.startsWith("["));
+# - the shaded jackson-databind keeps a @JsonIgnore'd Record component ignored when a PropertyNamingStrategy renames it
+#   (POJOPropertiesCollector._renameUsing calls _collectIgnorals for the renamed name).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -33,3 +35,14 @@ if ! grep -aq startsWith "${tmp}/InetSocketAddressSerializer.class"; then
   exit 1
 fi
 echo "the shaded jackson-databind InetSocketAddressSerializer brackets unresolved IPv6 hosts"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/introspect/POJOPropertiesCollector.class \
+  > "${tmp}/POJOPropertiesCollector.class"
+# _collectIgnorals is called from other methods of the class as well, so check the bytecode of _renameUsing itself.
+javap -c -p "${tmp}/POJOPropertiesCollector.class" > "${tmp}/POJOPropertiesCollector.javap"
+if ! awk '/ _renameUsing\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' "${tmp}/POJOPropertiesCollector.javap" \
+    | grep 'Method _collectIgnorals:' > /dev/null; then
+  echo "the shaded jackson-databind POJOPropertiesCollector in ${jar} drops the ignoral of renamed properties" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind POJOPropertiesCollector keeps renamed @JsonIgnore'd properties ignored"

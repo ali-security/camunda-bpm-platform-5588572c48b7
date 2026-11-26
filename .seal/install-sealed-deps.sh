@@ -14,6 +14,11 @@
 #   from f3c95dcf728b6b726a2c0375f07b28c6442967ea (#6185)).
 #   The #5951 part is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
 #   (patches/CVE-2026-54514.patch).
+# - jackson-databind 2.15.2 with the fix for CVE-2026-59888 (@JsonIgnore on a Record component bypassed when a
+#   PropertyNamingStrategy renames it, upstream FasterXML/jackson-databind c7c678360624da5bc7eed2152789fa522880db9d
+#   (#5974)).
+#   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
+#   (patches/CVE-2026-59888.patch).
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -25,6 +30,11 @@ JACKSON_DATABIND_COMMIT=74a57b2f6cd3b6e0fe2a61ed16734f15ba2abc95  # tag jackson-
 # The job sets JDK 8 up ahead of JDK 17, which leaves JAVA_HOME_8_X64 behind for this script.
 if [ -z "${JAVA_HOME_8_X64:-}" ]; then
   echo "JAVA_HOME_8_X64 is not set: set up JDK 8 before running this script" >&2
+  exit 1
+fi
+# The CVE-2026-59888 tests deserialize Records, which jackson-databind 2.15.2 compiles only on JDK 17 (java17 profile).
+if [ -z "${JAVA_HOME_17_X64:-}" ]; then
+  echo "JAVA_HOME_17_X64 is not set: set up JDK 17 before running this script" >&2
   exit 1
 fi
 export JAVA_HOME="${JAVA_HOME_8_X64}"
@@ -49,9 +59,22 @@ git -C "${work}/jackson-databind" fetch --quiet --depth 1 https://github.com/Fas
   "${JACKSON_DATABIND_COMMIT}"
 git -C "${work}/jackson-databind" checkout --quiet FETCH_HEAD
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54514.patch"
-# Runs the patch's own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
-# unresolved IPv6 hosts are serialized bracketed.
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59888.patch"
+# Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
+# unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
+# POJOPropertiesCollector.
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
-  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test \
+  -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.javadoc.skip=true -Dgpg.skip=true
-echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization into ${HOME}/.m2"
+echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization and the renamed" \
+  "@JsonIgnore Record component ignoral into ${HOME}/.m2"
+
+# The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
+# build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against
+# the same patched checkout, so the install fails unless a @JsonIgnore'd Record component cannot be set through its
+# PropertyNamingStrategy-renamed name. The jar installed above stays the JDK 8 build.
+JAVA_HOME="${JAVA_HOME_17_X64}" PATH="${JAVA_HOME_17_X64}/bin:${PATH}" mvn -B -f "${work}/jackson-databind/pom.xml" test \
+  -Dtest=RecordIgnoreNamingStrategy5974Test,RecordWithJsonIgnoreTest,RecordWithJsonNaming3102Test,RecordNamingStrategy2992Test \
+  -Dmaven.javadoc.skip=true -Dgpg.skip=true
+echo "jackson-databind 2.15.2 ignores renamed @JsonIgnore Record components on JDK 17"
