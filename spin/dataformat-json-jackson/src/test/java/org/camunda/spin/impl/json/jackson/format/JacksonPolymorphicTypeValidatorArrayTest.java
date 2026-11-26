@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.fail;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
 
 import org.camunda.spin.json.SpinJsonException;
 import org.junit.Before;
@@ -69,7 +70,11 @@ public class JacksonPolymorphicTypeValidatorArrayTest {
     public int data;
   }
 
-  /** Not allow-listed, element of an array of an interface type. */
+  /**
+   * Element type of an array of an interface type: allow-listed exactly (not its sub-types) where used, since
+   * {@code allowIfSubTypeIsArray()} no longer accepts abstract or interface element types on their own
+   * (CVE-2026-110879).
+   */
   public interface Marker {
   }
 
@@ -159,7 +164,13 @@ public class JacksonPolymorphicTypeValidatorArrayTest {
 
   @Test
   public void shouldRejectNotAllowListedElementOfInterfaceTypedArray() throws Exception {
-    ObjectMapper objectMapper = defaultTypingObjectMapper();
+    PolymorphicTypeValidator ptv = BasicPolymorphicTypeValidator.builder()
+        .allowIfSubTypeIsArray()
+        .allowIfSubType(Pattern.compile(Pattern.quote(Marker.class.getName())))
+        .allowIfSubType(SafePayload.class)
+        .build();
+    ObjectMapper objectMapper = new JacksonJsonDataFormat("test").getObjectMapper();
+    objectMapper.activateDefaultTyping(ptv, DefaultTyping.NON_FINAL);
     String json = wrapper("[L" + Marker.class.getName() + ";",
         "[[\"" + MarkerGadget.class.getName() + "\",{\"cmd\":\"x\"}]]");
 

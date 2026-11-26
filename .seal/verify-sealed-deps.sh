@@ -10,7 +10,8 @@
 #   approving every array (validateSubType reads _acceptArrayTypes and unwraps Class.getComponentType), and consults
 #   the name-based matchers for the element type too (validateSubType calls validateSubClassName);
 # - the shaded jackson-databind validates the type parameters of generic type ids against the PolymorphicTypeValidator
-#   instead of only the raw container class (DatabindContext._resolveAndValidateGeneric calls _validateTypeParameter);
+#   instead of only the raw container class (DatabindContext._resolveAndValidateGeneric calls _validateContainedTypes,
+#   which replaced _validateTypeParameter with the CVE-2026-110879 fix);
 # - the shaded jackson-databind keeps the per-property @JsonIgnoreProperties / @JsonIncludeProperties when a per-property
 #   @JsonFormat changes the case-insensitivity (BeanDeserializerBase.createContextual rebuilds the case-insensitive
 #   property map from the filtered contextual deserializer, not from this);
@@ -30,7 +31,15 @@
 #   type (the DefaultBaseTypeLimitingValidator$UnsafeBaseTypes constructor adds Comparable to UNSAFE);
 # - the shaded jackson-databind bounds the type id to deserializer cache of its TypeDeserializers
 #   (TypeDeserializerBase._findDeserializer clears the cache once it holds 1000 entries, skips type ids longer than 256
-#   characters, and returns the "nullifying" fallback without caching it).
+#   characters, and returns the "nullifying" fallback without caching it);
+# - the shaded jackson-databind validates the type parameters of generic type ids and the element type of array type
+#   ids like direct type ids, also once the base type is approved (StdTypeResolverBuilder.verifyBaseTypeValidity
+#   keeps the configured validator in the new ApprovedBaseTypeValidator instead of swapping in
+#   LaissezFaireSubTypeValidator.instance; DatabindContext.resolveAndValidateSubType asks
+#   PolymorphicTypeValidator.isArrayTypeAllowedExplicitly and calls _validateArrayElementType;
+#   DatabindContext._validateContainedType calls _configuredValidator and SubTypeValidator.isIllegalType), and
+#   BasicPolymorphicTypeValidator.validateSubType no longer accepts every abstract / interface array element type (no
+#   Class.isInterface / Modifier.isAbstract call).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -121,10 +130,11 @@ fi
 echo "the shaded jackson-databind BasicPolymorphicTypeValidator consults the name-based matchers for array element types"
 
 unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/DatabindContext.class > "${tmp}/DatabindContext.class"
-# _validateTypeParameter also calls itself, so check the bytecode of _resolveAndValidateGeneric itself.
+# _validateContainedTypes is also called by _validateContainedType, so check the bytecode of _resolveAndValidateGeneric
+# itself. (The CVE-2026-110879 fix replaced the CVE-2026-54512 walk _validateTypeParameter with _validateContainedTypes.)
 javap -c -p "${tmp}/DatabindContext.class" > "${tmp}/DatabindContext.javap"
 if ! awk '/ _resolveAndValidateGeneric\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
-    "${tmp}/DatabindContext.javap" | grep 'Method _validateTypeParameter:' > /dev/null; then
+    "${tmp}/DatabindContext.javap" | grep 'Method _validateContainedTypes:' > /dev/null; then
   echo "the shaded jackson-databind DatabindContext in ${jar} does not validate the type parameters of generic type ids" >&2
   exit 1
 fi
@@ -275,3 +285,50 @@ if ! grep -E 'sipush +256$' "${tmp}/_findDeserializer.javap" > /dev/null \
 fi
 echo "the shaded jackson-databind TypeDeserializerBase bounds the type id cache and does not cache the nullifying" \
   "fallback"
+
+approved='spinjar/com/fasterxml/jackson/databind/jsontype/impl/ApprovedBaseTypeValidator.class'
+if ! unzip -p "${jar}" "${approved}" > "${tmp}/ApprovedBaseTypeValidator.class" \
+    || [ ! -s "${tmp}/ApprovedBaseTypeValidator.class" ]; then
+  echo "the shaded jackson-databind in ${jar} has no ${approved}" >&2
+  exit 1
+fi
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/jsontype/impl/StdTypeResolverBuilder.class \
+  > "${tmp}/StdTypeResolverBuilder.class"
+# verifyBaseTypeValidity must keep the configured validator for an approved base type (new ApprovedBaseTypeValidator),
+# so the type parameters and array element types of type ids can still be validated against it. Unpatched, it returns
+# LaissezFaireSubTypeValidator.instance, which approves every one of them.
+javap -c -p "${tmp}/StdTypeResolverBuilder.class" > "${tmp}/StdTypeResolverBuilder.javap"
+awk '/ verifyBaseTypeValidity\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+  "${tmp}/StdTypeResolverBuilder.javap" > "${tmp}/verifyBaseTypeValidity.javap"
+if ! grep -E '// class [^ ]*/ApprovedBaseTypeValidator$' "${tmp}/verifyBaseTypeValidity.javap" > /dev/null \
+    || grep 'Field [^ ]*LaissezFaireSubTypeValidator.instance:' "${tmp}/verifyBaseTypeValidity.javap" > /dev/null; then
+  echo "the shaded jackson-databind StdTypeResolverBuilder.verifyBaseTypeValidity in ${jar} drops the configured" \
+    "validator once the base type is approved" >&2
+  exit 1
+fi
+# resolveAndValidateSubType must validate the element type of an array type id unless the validator allows the array
+# type explicitly, and _validateContainedType must check type parameters and array element types with the configured
+# validator (not the approved-base-type wrapper) and against the deny list. Unpatched, none of these methods exist.
+awk '/ resolveAndValidateSubType\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+  "${tmp}/DatabindContext.javap" > "${tmp}/resolveAndValidateSubType.javap"
+awk '/ _validateContainedType\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+  "${tmp}/DatabindContext.javap" > "${tmp}/_validateContainedType.javap"
+if ! grep 'Method [^ ]*PolymorphicTypeValidator.isArrayTypeAllowedExplicitly:' \
+      "${tmp}/resolveAndValidateSubType.javap" > /dev/null \
+    || ! grep 'Method _validateArrayElementType:' "${tmp}/resolveAndValidateSubType.javap" > /dev/null \
+    || ! grep 'Method _configuredValidator:' "${tmp}/_validateContainedType.javap" > /dev/null \
+    || ! grep 'Method [^ ]*SubTypeValidator.isIllegalType:' "${tmp}/_validateContainedType.javap" > /dev/null; then
+  echo "the shaded jackson-databind DatabindContext in ${jar} does not validate the type parameters and array element" \
+    "types of type ids like direct type ids" >&2
+  exit 1
+fi
+# validateSubType must no longer approve arrays of every abstract / interface element type: unpatched, it calls
+# Class.isInterface and Modifier.isAbstract on the innermost element type.
+if grep -E 'Method java/lang/Class.isInterface:|Method java/lang/reflect/Modifier.isAbstract:' \
+    "${tmp}/validateSubType.javap" > /dev/null; then
+  echo "the shaded jackson-databind BasicPolymorphicTypeValidator.validateSubType in ${jar} approves arrays of any" \
+    "abstract or interface element type" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind validates the type parameters and array element types of type ids like direct type" \
+  "ids, also for approved base types, and no longer approves arrays of every abstract or interface element type"

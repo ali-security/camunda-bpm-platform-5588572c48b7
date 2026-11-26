@@ -96,6 +96,22 @@
 #   2870d1d6dc1b7e1c07ee11dd5b04ab71cddbb577 (#6203)).
 #   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
 #   (patches/CVE-2026-91776.patch), without the 2.18.11 version notes in the javadoc.
+# - jackson-databind 2.15.2 with the fix for CVE-2026-110879 (the classes named as type parameters of a generic type id,
+#   and the element type of an array type id, bypassed the PolymorphicTypeValidator: once allowIfBaseType() approved
+#   the polymorphic base type, StdTypeResolverBuilder swapped the configured validator for
+#   LaissezFaireSubTypeValidator, so "a.b.Envelope<a.b.Gadget>", "java.util.HashMap<a.b.Gadget,java.lang.String>"
+#   (Map key) or "[La.b.Gadget;" let untrusted JSON instantiate any type; an array approved by a rule that matches
+#   other arrays too (allowIfSubType(Serializable.class), every array being Serializable) covered any element type;
+#   and allowIfSubTypeIsArray() accepted every abstract / interface element type, though one deserializable through
+#   @JsonDeserialize(as = ...) needs no type id of its own. StdTypeResolverBuilder now keeps the configured validator
+#   in the new ApprovedBaseTypeValidator, DatabindContext validates every type parameter and array element type like
+#   a direct type id (_validateContainedType, the SubTypeValidator deny list included) unless the validator allows
+#   the array type explicitly (PolymorphicTypeValidator.isArrayTypeAllowedExplicitly, allowIfSubType(Bar[].class)),
+#   and allowIfSubTypeIsArray() only accepts primitive (and Number) element types without allow-listing, upstream
+#   FasterXML/jackson-databind 9e7c79ca2731d5c95e3d505110427435c02d9868 and
+#   f8f66a6c1febd1cf7ed29ab5e3d7abfa03f7a98f (#6287, #6289)).
+#   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
+#   (patches/CVE-2026-110879.llm.patch), without the 2.18.12 version notes in the javadoc.
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -147,6 +163,7 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-77310
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-19032.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-83557.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-91776.patch"
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-110879.patch"
 # Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
 # unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
 # POJOPropertiesCollector, plus the array element type validation tests and the other tests covering
@@ -163,9 +180,12 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-91776
 # covering NioPathDeserializer (TestJava7Types), plus the Comparable base type test covering the unsafe base types of
 # DefaultBaseTypeLimitingValidator (AnnotatedPolymorphicValidationTest), plus the bounded type id cache tests
 # (UnknownTypeIdCachingTest, TypeIdCacheGrowthTest) and the other defaultImpl, custom type id resolver, sub-type and
-# unknown type id problem handler tests covering TypeDeserializerBase._findDeserializer.
+# unknown type id problem handler tests covering TypeDeserializerBase._findDeserializer, plus the type parameter and
+# array element type validation tests (GenericTypeIdParameterValidationTest, BasicPTVWithArraysTest) and the other
+# default typing, generic and polymorphic validation tests covering the validator StdTypeResolverBuilder keeps for an
+# approved base type and DatabindContext._validateContainedType.
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
-  -Dtest=TestJava7Types,JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,CoerceMiscScalarsTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383,JsonViewExternalTypeIdBypassTest,CreatorViewBypassExtTypeIdTest,ExternalTypeIdTest,ExternalTypeIdWithCreatorTest,ExternalTypeIdWithCreator3045Test,ExternalTypeId2588Test,ExternalTypeId96Test,ExternalTypeIdWithEnum1328Test,ExternalTypeIdWithIgnoreUnknownTest,ExternalTypeCustomResolverTest,JsonValueExtTypeIdTest,MultipleExternalIds291Test,TestPropertyCreatorSubtypesExternalPropertyMissingProperty,TestSubtypesExternalPropertyMissingProperty,DelegatingExternalProperty1003Test,TestVisibleTypeId,BuilderAdvancedTest,UnknownTypeIdCachingTest,TypeIdCacheGrowthTest,TestPolymorphicWithDefaultImpl,TestPolymorphicWithDefaultImpl1565,TestCustomTypeIdResolver,TestSubtypes,TestTypedDeserialization,TestBaseTypeAsDefault,TestTypeNames,StrictJsonTypeInfoHandling3853Test,ProblemHandlerTest,ProblemHandlerUnknownTypeId2221Test \
+  -Dtest=GenericTypeIdParameterValidationTest,TestDefaultForObject,TestDefaultForMaps,TestDefaultForLists,TestDefaultForEnums,TestDefaultForScalars,TestDefaultWithCreators,DefaultWithBaseType1093Test,DefaultTypeAbstractMapping3235Test,TestWithGenerics,TypeRefinementForMapTest,PolymorphicViaRefTypeTest,TestJava7Types,JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,CoerceMiscScalarsTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383,JsonViewExternalTypeIdBypassTest,CreatorViewBypassExtTypeIdTest,ExternalTypeIdTest,ExternalTypeIdWithCreatorTest,ExternalTypeIdWithCreator3045Test,ExternalTypeId2588Test,ExternalTypeId96Test,ExternalTypeIdWithEnum1328Test,ExternalTypeIdWithIgnoreUnknownTest,ExternalTypeCustomResolverTest,JsonValueExtTypeIdTest,MultipleExternalIds291Test,TestPropertyCreatorSubtypesExternalPropertyMissingProperty,TestSubtypesExternalPropertyMissingProperty,DelegatingExternalProperty1003Test,TestVisibleTypeId,BuilderAdvancedTest,UnknownTypeIdCachingTest,TypeIdCacheGrowthTest,TestPolymorphicWithDefaultImpl,TestPolymorphicWithDefaultImpl1565,TestCustomTypeIdResolver,TestSubtypes,TestTypedDeserialization,TestBaseTypeAsDefault,TestTypeNames,StrictJsonTypeInfoHandling3853Test,ProblemHandlerTest,ProblemHandlerUnknownTypeId2221Test \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.javadoc.skip=true -Dgpg.skip=true
 echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization, the renamed" \
@@ -173,7 +193,8 @@ echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress de
   "validation, the @JsonView checks of the property-based creator paths, the per-property ignoral kept by" \
   "case-insensitive deserialization, the @JsonView checks of unwrapped properties, the @JsonView checks of" \
   "external type id properties, the literal-only InetAddress deserialization, the Path URI scheme allow-list," \
-  "the Comparable unsafe base type and the bounded type id cache into ${HOME}/.m2"
+  "the Comparable unsafe base type, the bounded type id cache and the type parameter and array element type" \
+  "validation of approved base types into ${HOME}/.m2"
 
 # The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
 # build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against
