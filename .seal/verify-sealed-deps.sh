@@ -19,7 +19,10 @@
 # - the shaded jackson-databind does not set external type id (EXTERNAL_PROPERTY) properties, nor the creator
 #   parameters of a bean that has one, that the active @JsonView hides (both ExternalTypeHandler.complete overloads and
 #   ExternalTypeHandler._deserializeAndSet call SettableBeanProperty.visibleInView, and
-#   BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId calls it for creator properties too).
+#   BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId calls it for creator properties too);
+# - the shaded jackson-databind deserializes InetAddress values from IP address literals only, without DNS lookups
+#   (FromStringDeserializer$Std._deserialize calls InetAddressValidator.isInetAddress before InetAddress.getByName,
+#   and InetAddressValidator checks every character through its ASCII-only _digit helper, never Character.digit).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -41,6 +44,35 @@ if ! grep -aq createUnresolved "${tmp}/FromStringDeserializer\$Std.class"; then
   exit 1
 fi
 echo "the shaded jackson-databind FromStringDeserializer\$Std creates unresolved InetSocketAddress values"
+
+# _deserialize must validate the InetAddress string as an IP address literal before it calls InetAddress.getByName,
+# which resolves anything else as a host name. Unpatched, it calls getByName on the raw value.
+javap -c -p "${tmp}/FromStringDeserializer\$Std.class" > "${tmp}/FromStringDeserializer\$Std.javap"
+if ! awk '/ _deserialize\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' "${tmp}/FromStringDeserializer\$Std.javap" \
+    | grep 'InetAddressValidator.isInetAddress:' > /dev/null; then
+  echo "the shaded jackson-databind FromStringDeserializer\$Std in ${jar} resolves InetAddress host names" >&2
+  exit 1
+fi
+validator='spinjar/com/fasterxml/jackson/databind/deser/std/InetAddressValidator.class'
+if ! unzip -p "${jar}" "${validator}" > "${tmp}/InetAddressValidator.class" \
+    || [ ! -s "${tmp}/InetAddressValidator.class" ]; then
+  echo "the shaded jackson-databind in ${jar} has no ${validator}" >&2
+  exit 1
+fi
+# Character.digit accepts non-ASCII digits (full-width, Arabic-Indic, ...) that InetAddress.getByName resolves as host
+# names, so the methods that check the characters of the literal must call the ASCII-only _digit helper instead.
+javap -c -p "${tmp}/InetAddressValidator.class" > "${tmp}/InetAddressValidator.javap"
+for method in _ipStringToBytes _parseOctet _parseHextet; do
+  body="$(awk -v m=" ${method}\\\\(" '$0 ~ m { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+    "${tmp}/InetAddressValidator.javap")"
+  if ! echo "${body}" | grep 'Method _digit:' > /dev/null \
+      || echo "${body}" | grep 'Method java/lang/Character.digit:' > /dev/null; then
+    echo "the shaded jackson-databind InetAddressValidator.${method} in ${jar} accepts non-ASCII digits" >&2
+    exit 1
+  fi
+done
+echo "the shaded jackson-databind FromStringDeserializer\$Std accepts InetAddress values only as ASCII IP address" \
+  "literals, without DNS lookups"
 
 unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/ser/std/InetSocketAddressSerializer.class \
   > "${tmp}/InetSocketAddressSerializer.class"

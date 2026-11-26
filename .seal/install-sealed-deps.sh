@@ -62,6 +62,14 @@
 #   view check of the external-type-id path from 7dc7a17459e70b7db071cfdf06d2d96d70d4069d (#6004)).
 #   The patch is ported from the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.4+sp1p1 ships
 #   (patches/GHSA-mhm7-754m-9p8w.llm.patch).
+# - jackson-databind 2.15.2 with the fix for CVE-2026-77310 (InetAddress deserialization passed any string to
+#   InetAddress.getByName, so untrusted JSON could make the application resolve attacker-chosen host names (SSRF / DNS
+#   lookups); FromStringDeserializer now only accepts IPv4 / IPv6 address literals, checked by the new
+#   InetAddressValidator without any lookup, and rejects everything else, non-ASCII digits included, upstream
+#   FasterXML/jackson-databind 2fc7bd9057dd051d7dea0e5fcad89822d0fa5ebd (#6058) and
+#   ba13479ae752a814daa1e48abd6128631e07bcbb (#6116)).
+#   The patch is ported from the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.4+sp1p1 ships
+#   (patches/CVE-2026-77310.llm.patch).
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -109,6 +117,7 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54518
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54515.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59889.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/GHSA-mhm7-754m-9p8w.patch"
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-77310.patch"
 # Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
 # unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
 # POJOPropertiesCollector, plus the array element type validation tests and the other tests covering
@@ -119,16 +128,18 @@ git -C "${work}/jackson-databind" apply "${here}/jackson-databind/GHSA-mhm7-754m
 # other case-insensitivity and per-property ignoral / inclusion tests covering BeanDeserializerBase.createContextual,
 # plus the @JsonView unwrapped field / setter bypass tests and the other unwrapped tests covering
 # UnwrappedPropertyHandler.processUnwrapped, plus the @JsonView external type id bypass tests and the other external
-# type id tests covering ExternalTypeHandler and BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId.
+# type id tests covering ExternalTypeHandler and BeanDeserializer.deserializeUsingPropertyBasedWithExternalTypeId,
+# plus the InetAddress literal-only tests (JDKStringLikeTypeDeserTest, JDKTypeSerializationTest) and the empty-String
+# coercion tests covering the InetAddress branch of FromStringDeserializer.
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
-  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383,JsonViewExternalTypeIdBypassTest,CreatorViewBypassExtTypeIdTest,ExternalTypeIdTest,ExternalTypeIdWithCreatorTest,ExternalTypeIdWithCreator3045Test,ExternalTypeId2588Test,ExternalTypeId96Test,ExternalTypeIdWithEnum1328Test,ExternalTypeIdWithIgnoreUnknownTest,ExternalTypeCustomResolverTest,JsonValueExtTypeIdTest,MultipleExternalIds291Test,TestPropertyCreatorSubtypesExternalPropertyMissingProperty,TestSubtypesExternalPropertyMissingProperty,DelegatingExternalProperty1003Test,TestVisibleTypeId,BuilderAdvancedTest \
+  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,CoerceMiscScalarsTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test,BuilderViewBypass5969And5971Test,UnwrappedCreatorViewBypass5971Test,TestViewDeserialization,DefaultViewTest,BuilderWithViewTest,UnwrappedWithView1559Test,UnwrappedCreatorParam265Test,BuilderWithUnwrappedTest,TestUnwrapped,TestUpdateViaObjectReader,IgnorePropertiesCaseInsensitive5962Test,CaseInsensitiveDeserTest,CaseInsensitiveDeser953Test,IgnorePropertyOnDeserTest,IncludeWithDeserTest,RecursiveIgnorePropertiesTest,UnwrappedViewBypass6060Test,TestUnwrappedWithPrefix,TestUnwrappedWithSameName647,TestUnwrappedWithTypeInfo,TestUnwrappedRecursive383,JsonViewExternalTypeIdBypassTest,CreatorViewBypassExtTypeIdTest,ExternalTypeIdTest,ExternalTypeIdWithCreatorTest,ExternalTypeIdWithCreator3045Test,ExternalTypeId2588Test,ExternalTypeId96Test,ExternalTypeIdWithEnum1328Test,ExternalTypeIdWithIgnoreUnknownTest,ExternalTypeCustomResolverTest,JsonValueExtTypeIdTest,MultipleExternalIds291Test,TestPropertyCreatorSubtypesExternalPropertyMissingProperty,TestSubtypesExternalPropertyMissingProperty,DelegatingExternalProperty1003Test,TestVisibleTypeId,BuilderAdvancedTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.javadoc.skip=true -Dgpg.skip=true
 echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization, the renamed" \
   "@JsonIgnore Record component ignoral, the array element type validation, the generic type parameter" \
   "validation, the @JsonView checks of the property-based creator paths, the per-property ignoral kept by" \
-  "case-insensitive deserialization, the @JsonView checks of unwrapped properties and the @JsonView checks of" \
-  "external type id properties into ${HOME}/.m2"
+  "case-insensitive deserialization, the @JsonView checks of unwrapped properties, the @JsonView checks of" \
+  "external type id properties and the literal-only InetAddress deserialization into ${HOME}/.m2"
 
 # The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
 # build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against
