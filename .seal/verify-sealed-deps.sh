@@ -7,7 +7,10 @@
 # - the shaded jackson-databind keeps a @JsonIgnore'd Record component ignored when a PropertyNamingStrategy renames it
 #   (POJOPropertiesCollector._renameUsing calls _collectIgnorals for the renamed name);
 # - the shaded jackson-databind BasicPolymorphicTypeValidator validates the element type of array sub-types instead of
-#   approving every array (validateSubType reads _acceptArrayTypes and unwraps Class.getComponentType).
+#   approving every array (validateSubType reads _acceptArrayTypes and unwraps Class.getComponentType), and consults
+#   the name-based matchers for the element type too (validateSubType calls validateSubClassName);
+# - the shaded jackson-databind validates the type parameters of generic type ids against the PolymorphicTypeValidator
+#   instead of only the raw container class (DatabindContext._resolveAndValidateGeneric calls _validateTypeParameter).
 set -euo pipefail
 
 jar="spin/dataformat-all/target/camunda-spin-dataformat-all-7.23.0.jar"
@@ -61,3 +64,19 @@ if ! grep 'Field _acceptArrayTypes:Z' "${tmp}/validateSubType.javap" > /dev/null
   exit 1
 fi
 echo "the shaded jackson-databind BasicPolymorphicTypeValidator validates the element type of array sub-types"
+if ! grep 'Method validateSubClassName:' "${tmp}/validateSubType.javap" > /dev/null; then
+  echo "the shaded jackson-databind BasicPolymorphicTypeValidator in ${jar} ignores the name-based matchers for" \
+    "array element types" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind BasicPolymorphicTypeValidator consults the name-based matchers for array element types"
+
+unzip -p "${jar}" spinjar/com/fasterxml/jackson/databind/DatabindContext.class > "${tmp}/DatabindContext.class"
+# _validateTypeParameter also calls itself, so check the bytecode of _resolveAndValidateGeneric itself.
+javap -c -p "${tmp}/DatabindContext.class" > "${tmp}/DatabindContext.javap"
+if ! awk '/ _resolveAndValidateGeneric\(/ { inside = 1 } inside && /^$/ { inside = 0 } inside' \
+    "${tmp}/DatabindContext.javap" | grep 'Method _validateTypeParameter:' > /dev/null; then
+  echo "the shaded jackson-databind DatabindContext in ${jar} does not validate the type parameters of generic type ids" >&2
+  exit 1
+fi
+echo "the shaded jackson-databind DatabindContext validates the type parameters of generic type ids"

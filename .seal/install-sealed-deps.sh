@@ -25,6 +25,14 @@
 #   FasterXML/jackson-databind 01d1692c8d0ed03e51a0e3c4f8a9e6908e4931e5 (#5981)).
 #   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
 #   (patches/CVE-2026-54513.llm.patch).
+# - jackson-databind 2.15.2 with the fix for CVE-2026-54512 (the PolymorphicTypeValidator only saw the raw container
+#   class of a generic type id, so a name-based allow-list for a safe container was bypassed by smuggling a denied
+#   type as a type parameter, e.g. "java.util.ArrayList<EvilGadget>"; DatabindContext now validates every type
+#   parameter, nested parameters and array components included, and the array element type check of
+#   BasicPolymorphicTypeValidator also consults the name-based matchers, upstream FasterXML/jackson-databind
+#   434d6c511de7fdd9872f29157aafb6162d12d8d5 and 26a8c70bd42949ad72fbd9608e9f060ce661cb11 (#5988)).
+#   The patch is the one sealed com.fasterxml.jackson.core:jackson-databind 2.15.2+sp5p5 ships
+#   (patches/CVE-2026-54512.patch).
 #
 # jackson-core is installed first: jackson-databind 2.15.2 builds against the jackson-core 2.15.2 in ${HOME}/.m2.
 set -euo pipefail
@@ -67,16 +75,19 @@ git -C "${work}/jackson-databind" checkout --quiet FETCH_HEAD
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54514.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-59888.patch"
 git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54513.patch"
+git -C "${work}/jackson-databind" apply "${here}/jackson-databind/CVE-2026-54512.patch"
 # Runs the patches' own tests, so the install fails unless InetSocketAddress values are deserialized unresolved and
 # unresolved IPv6 hosts are serialized bracketed, plus the property ignoral and naming strategy tests covering
 # POJOPropertiesCollector, plus the array element type validation tests and the other tests covering
-# BasicPolymorphicTypeValidator.allowIfSubTypeIsArray().
+# BasicPolymorphicTypeValidator.allowIfSubTypeIsArray(), plus the generic type parameter validation tests and the
+# other tests covering PolymorphicTypeValidator use in DatabindContext.resolveAndValidateSubType().
 mvn -B -f "${work}/jackson-databind/pom.xml" install \
-  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest \
+  -Dtest=JDKStringLikeTypeDeserTest,JDKTypeSerializationTest,POJOPropertiesCollectorTest,IgnoreWithDeserTest,TestNamingStrategyStd,TestNamingStrategyCustom,NamingStrategyViaCreator556Test,BasicPTVArrayComponentBypassTest,BasicPTVWithArraysTest,BasicPTVTest,TestDefaultForArrays,ExceptionDeserializationTest,BasicPTVGenericParameterBypassTest,ValidatePolymSubTypeTest,ValidatePolymBaseTypeTest,CustomPTVMatchersTest,AnnotatedPolymorphicValidationTest,GenericTypeId1735Test,JsonTypeInfoIgnored2968Test,DefaultTypeResolver3505Test,DeserDefaultTypedConcrete2968Test \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.javadoc.skip=true -Dgpg.skip=true
 echo "installed jackson-databind 2.15.2 with the unresolved InetSocketAddress deserialization, the renamed" \
-  "@JsonIgnore Record component ignoral and the array element type validation into ${HOME}/.m2"
+  "@JsonIgnore Record component ignoral, the array element type validation and the generic type parameter" \
+  "validation into ${HOME}/.m2"
 
 # The CVE-2026-59888 test (src/test-jdk17/.../records/RecordIgnoreNamingStrategy5974Test) uses Records, so the JDK 8
 # build above does not compile it. Run it on JDK 17, together with the Record ignoral and naming strategy tests, against
